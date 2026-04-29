@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>WebGIS Strasbourg</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+    <style>
+        #map {
+            height: 100vh;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="map"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <script>
+        // Koordinat Strasbourg
+        var map = L.map('map').setView([48.5734, 7.7521], 12);
+
+        // Basemap OSM
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+
+        // Load GeoJSON
+        fetch('Data/data.geojson')
+            .then(response => response.json())
+            .then(data => {
+                L.geoJSON(data, {
+                    onEachFeature: function (feature, layer) {
+                        if (feature.properties) {
+                            let popupContent = "";
+                            for (let key in feature.properties) {
+                                popupContent += "<b>" + key + "</b>: " + feature.properties[key] + "<br>";
+                            }
+                            layer.bindPopup(popupContent);
+                        }
+                    }
+                }).addTo(map);
+            });
+    </script>
+
+</body>
+
+</html>
