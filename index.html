@@ -10,8 +10,77 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 
     <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+
         #map {
             height: 100vh;
+            width: 100vw;
+        }
+
+        /* 1. Filter Control Styling */
+        .filter-control {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+            line-height: 1.5;
+        }
+
+        /* 2. Improved Popup Styling */
+        .custom-popup .popup-title {
+            margin: 0 0 5px 0;
+            font-size: 14px;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 3px;
+        }
+
+        .custom-popup .popup-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .custom-popup .popup-table th,
+        .custom-popup .popup-table td {
+            text-align: left;
+            padding: 4px;
+            border-bottom: 1px solid #eee;
+            font-size: 13px;
+        }
+
+        .custom-popup .popup-table th {
+            color: #555;
+            padding-right: 15px;
+        }
+
+        /* 3. Locate Me Button Styling */
+        .locate-btn {
+            background: white;
+            border: 2px solid rgba(0, 0, 0, 0.2);
+            padding: 6px 10px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-weight: bold;
+            box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+            font-size: 13px;
+        }
+
+        .locate-btn:hover {
+            background: #f4f4f4;
+        }
+
+        /* 4. Coordinate Display Styling */
+        .coord-box {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+            border: 1px solid #ccc;
         }
     </style>
 </head>
@@ -24,30 +93,973 @@
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
     <script>
-        // Koordinat Strasbourg
+        // Koordinat Strasbourg (Original map initialization)
         var map = L.map('map').setView([48.5734, 7.7521], 12);
 
-        // Basemap OSM
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // Basemap OSM (Original)
+        var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; OpenStreetMap'
         }).addTo(map);
 
+        // 5. Basemap Attribution Fix (Added OpenTopoMap with proper attribution)
+        var topoMapLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+            attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+        });
+
+        // Add basemaps to a layer control
+        L.control.layers({
+            "OSM Default": osmLayer,
+            "OpenTopoMap": topoMapLayer
+        }).addTo(map);
+
+        // 3. Locate Me Button
+        var locateControl = L.control({ position: 'topleft' });
+        locateControl.onAdd = function (map) {
+            var btn = L.DomUtil.create('button', 'locate-btn');
+            btn.innerHTML = '📍 Locate Me';
+            btn.onclick = function () {
+                // Detect user location and zoom to it
+                map.locate({ setView: true, maxZoom: 16 });
+            }
+            return btn;
+        };
+        locateControl.addTo(map);
+
+        // Event for when location is successfully found
+        map.on('locationfound', function (e) {
+            L.marker(e.latlng).addTo(map)
+                .bindPopup("<b>You are here</b>").openPopup();
+        });
+
+        // 4. Coordinate Display (Replacing map click alert)
+        var coordBox = L.control({ position: 'bottomleft' });
+        coordBox.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'coord-box');
+            div.innerHTML = "Coordinates: (Hover on map)";
+            return div;
+        };
+        coordBox.addTo(map);
+
+        // Update coordinates on mouse move
+        map.on('mousemove', function (e) {
+            document.querySelector('.coord-box').innerHTML =
+                "Lat: " + e.latlng.lat.toFixed(5) + " | Lng: " + e.latlng.lng.toFixed(5);
+        });
+
+
+
         // Load GeoJSON
-        fetch('Data/data.geojson')
+        var geojsonLayer; // Store the active layer
+        var allData; // Store the fetched data
+
+        fetch('data/data.geojson')
             .then(response => response.json())
             .then(data => {
-                L.geoJSON(data, {
-                    onEachFeature: function (feature, layer) {
-                        if (feature.properties) {
-                            let popupContent = "";
-                            for (let key in feature.properties) {
-                                popupContent += "<b>" + key + "</b>: " + feature.properties[key] + "<br>";
+                allData = data;
+
+                // Function to render data based on the selected filter
+                function renderData(filterType) {
+                    if (geojsonLayer) {
+                        map.removeLayer(geojsonLayer);
+                    }
+
+                    geojsonLayer = L.geoJSON(allData, {
+                        // 1. Layer Filter Control logic
+                        filter: function (feature) {
+                            if (filterType === 'buildings') {
+                                return feature.properties && feature.properties.building;
+                            } else if (filterType === 'roads') {
+                                return feature.properties && feature.properties.highway;
                             }
-                            layer.bindPopup(popupContent);
+                            return true; // Show all
+                        },
+                        onEachFeature: function (feature, layer) {
+                            if (feature.properties) {
+                                // 2. Improved Popup Design
+                                let popupContent = "<div class='custom-popup'>";
+                                popupContent += "<h4 class='popup-title'>Feature Information</h4>";
+                                popupContent += "<table class='popup-table'>";
+
+                                for (let key in feature.properties) {
+                                    let val = feature.properties[key];
+                                    // Display only non-null and non-empty properties
+                                    if (val !== null && val !== "") {
+                                        popupContent += "<tr><th>" + key + "</th><td>" + val + "</td></tr>";
+                                    }
+                                }
+                                popupContent += "</table></div>";
+                                layer.bindPopup(popupContent);
+                            }
+                        }
+                    }).addTo(map);
+                }
+
+                // Initial map render showing all features
+                renderData('all');
+
+                // 1. Layer Filter Control UI
+                var filterControl = L.control({ position: 'topright' });
+                filterControl.onAdd = function (map) {
+                    var div = L.DomUtil.create('div', 'filter-control');
+                    div.innerHTML = `
+                        <b>Layer Filter</b><br>
+                        <label><input type="radio" name="layerFilter" value="all" checked> Show all</label><br>
+                        <label><input type="radio" name="layerFilter" value="buildings"> Buildings only</label><br>
+                        <label><input type="radio" name="layerFilter" value="roads"> Roads only</label>
+                    `;
+
+                    // Prevent map interactions when clicking the control
+                    L.DomEvent.disableClickPropagation(div);
+                    return div;
+                };
+                filterControl.addTo(map);
+
+                // Add event listeners to filter radio buttons
+                document.querySelectorAll('input[name="layerFilter"]').forEach(radio => {
+                    radio.addEventListener('change', function () {
+                        renderData(this.value);
+                    });
+                });
+            });
+        // ==========================================
+        // 🎓 PROFESSIONAL A+ GRADE FEATURES 🎓
+        // ==========================================
+
+        (function () {
+            // --- 20. Clean Modern UI (Glassmorphism & Google Fonts) ---
+            const proStyles = document.createElement('style');
+            proStyles.innerHTML = `
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap');
+        
+        body, html, .leaflet-container {
+            font-family: 'Poppins', sans-serif !important;
+        }
+
+        /* Glassmorphism Core for all controls */
+        .glass-panel, .filter-control, .legend-box, #sidebar-panel, .search-control, .advanced-left, .action-controls, .coord-box, .opacity-control, .basemap-switcher {
+            background: rgba(255, 255, 255, 0.7) !important;
+            backdrop-filter: blur(16px) !important;
+            -webkit-backdrop-filter: blur(16px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.5) !important;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1) !important;
+            border-radius: 14px !important;
+            color: #2c3e50 !important;
+            transition: all 0.3s ease;
+        }
+
+        /* Dark Mode Glassmorphism Support */
+        body.dark-mode .glass-panel, body.dark-mode .filter-control, body.dark-mode .legend-box, 
+        body.dark-mode #sidebar-panel, body.dark-mode .search-control, body.dark-mode .advanced-left, 
+        body.dark-mode .action-controls, body.dark-mode .coord-box, body.dark-mode .opacity-control, body.dark-mode .basemap-switcher {
+            background: rgba(30, 30, 30, 0.75) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            color: #ecf0f1 !important;
+        }
+
+        /* 16. Animated Feature Highlight */
+        path.leaflet-interactive {
+            transition: fill-opacity 0.4s ease, stroke-width 0.3s ease, stroke 0.3s ease, fill 0.4s ease !important;
+        }
+
+        /* Sidebar Beautification */
+        #sidebar-panel {
+            scrollbar-width: thin;
+        }
+        #sidebar-panel h3 {
+            font-weight: 600;
+            color: #2980b9;
+            border-bottom: 2px solid rgba(41, 128, 185, 0.3);
+            font-family: 'Poppins', sans-serif;
+        }
+        body.dark-mode #sidebar-panel h3 { color: #3498db; }
+        .custom-popup table { font-family: 'Poppins', sans-serif; }
+
+        /* 10. Better Tooltip Styling */
+        .leaflet-tooltip {
+            background: rgba(20, 20, 20, 0.85) !important;
+            color: white !important;
+            border: 1px solid rgba(255,255,255,0.2) !important;
+            border-radius: 8px !important;
+            font-family: 'Poppins', sans-serif !important;
+            font-size: 13px !important;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3) !important;
+            backdrop-filter: blur(4px) !important;
+            padding: 6px 12px !important;
+            font-weight: 500 !important;
+        }
+        .leaflet-tooltip-top:before { border-top-color: rgba(20, 20, 20, 0.85) !important; }
+        
+        /* 19. Responsive UI for Mobile */
+        @media (max-width: 768px) {
+            #sidebar-panel { width: calc(100vw - 80px); left: 10px; max-height: 40vh; top: auto; bottom: 40px; }
+            .leaflet-control { margin: 5px !important; }
+            .legend-box, .basemap-switcher, .opacity-control { font-size: 11px !important; padding: 6px !important; }
+        }
+    `;
+            document.head.appendChild(proStyles);
+
+            // --- Dynamic Script Loading Utility ---
+            function loadDependency(type, url, callback) {
+                const el = document.createElement(type === 'js' ? 'script' : 'link');
+                if (type === 'js') { el.src = url; el.onload = callback; }
+                else { el.rel = 'stylesheet'; el.href = url; if (callback) el.onload = callback; }
+                document.head.appendChild(el);
+            }
+
+            // --- 11. Draw Tools (Leaflet Draw) ---
+            loadDependency('css', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css');
+            loadDependency('js', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js', () => {
+                const drawnItems = new L.FeatureGroup();
+                map.addLayer(drawnItems);
+                const drawControl = new L.Control.Draw({
+                    position: 'topleft',
+                    edit: { featureGroup: drawnItems },
+                    draw: {
+                        polygon: { shapeOptions: { color: '#3498db' } },
+                        polyline: { shapeOptions: { color: '#e74c3c' } },
+                        rectangle: { shapeOptions: { color: '#2ecc71' } },
+                        circle: true, marker: true, circlemarker: false
+                    }
+                });
+                map.addControl(drawControl);
+                map.on(L.Draw.Event.CREATED, function (event) { drawnItems.addLayer(event.layer); });
+            });
+
+            // --- 12. Export Map as Image ---
+            loadDependency('js', 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js', () => {
+                const actionDiv = document.querySelector('.action-controls');
+                if (actionDiv) {
+                    const shotBtn = L.DomUtil.create('button', 'action-btn', actionDiv);
+                    shotBtn.innerHTML = '📸 Export Image';
+                    shotBtn.title = 'Save map view as PNG';
+                    shotBtn.onclick = () => {
+                        shotBtn.innerHTML = '⏳ Processing...';
+                        html2canvas(document.getElementById('map'), { useCORS: true, allowTaint: false }).then(canvas => {
+                            const link = document.createElement('a');
+                            link.download = 'WebGIS_Dashboard_Export.png';
+                            link.href = canvas.toDataURL('image/png');
+                            link.click();
+                            shotBtn.innerHTML = '📸 Export Image';
+                        }).catch(e => {
+                            console.warn("Screenshot CORS issue on external tiles.", e);
+                            alert("Export partially completed. Note: Some external basemaps may block direct image exporting due to browser CORS policies.");
+                            shotBtn.innerHTML = '📸 Export Image';
+                        });
+                    };
+                }
+            });
+
+            // --- 1. Marker Clustering Integration ---
+            loadDependency('css', 'https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css');
+            loadDependency('css', 'https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css');
+            loadDependency('js', 'https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js', () => {
+                const clusterCheck = setInterval(() => {
+                    if (typeof geojsonLayer !== 'undefined' && map.hasLayer(geojsonLayer)) {
+                        let pointFeatures = [];
+                        // Find all point features to cluster them
+                        geojsonLayer.eachLayer(l => {
+                            if (l instanceof L.Marker || l instanceof L.CircleMarker) pointFeatures.push(l);
+                        });
+
+                        if (pointFeatures.length > 0) {
+                            const markers = L.markerClusterGroup({
+                                chunkedLoading: true,
+                                spiderfyOnMaxZoom: true,
+                                showCoverageOnHover: false
+                            });
+                            pointFeatures.forEach(l => {
+                                markers.addLayer(l);
+                                geojsonLayer.removeLayer(l);
+                            });
+                            map.addLayer(markers);
+                        }
+                        clearInterval(clusterCheck); // Stop checking once processed
+                    }
+                }, 1000);
+            });
+
+            // --- 13. Layer Opacity Control ---
+            const opacityControl = L.control({ position: 'bottomleft' });
+            opacityControl.onAdd = function () {
+                const div = L.DomUtil.create('div', 'glass-panel opacity-control');
+                div.style.padding = '12px';
+                div.style.marginBottom = '10px';
+                div.innerHTML = `
+            <div style="font-size:12px; font-weight:600; margin-bottom:8px; text-align:center; font-family:'Poppins',sans-serif;">🎚️ Layer Opacity</div>
+            <input type="range" id="layer-opacity-slider" min="0" max="1" step="0.1" value="0.8" style="width: 140px; cursor: pointer;">
+        `;
+                L.DomEvent.disableClickPropagation(div);
+                return div;
+            };
+            opacityControl.addTo(map);
+
+            // Bind slider input to layer styles
+            document.body.addEventListener('input', (e) => {
+                if (e.target.id === 'layer-opacity-slider' && typeof geojsonLayer !== 'undefined') {
+                    const val = parseFloat(e.target.value);
+                    geojsonLayer.eachLayer(layer => {
+                        if (layer.setStyle) layer.setStyle({ fillOpacity: val * 0.7, opacity: val });
+                    });
+                }
+            });
+
+            // --- 14. Advanced Basemap Switcher ---
+            const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '&copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+            });
+
+            const basemapSwitcher = L.control({ position: 'bottomleft' });
+            basemapSwitcher.onAdd = function () {
+                const div = L.DomUtil.create('div', 'glass-panel basemap-switcher');
+                div.style.padding = '12px';
+                div.style.display = 'flex';
+                div.style.flexDirection = 'column';
+                div.style.gap = '8px';
+                div.innerHTML = `
+            <div style="font-size:12px; font-weight:600; text-align:center; border-bottom:1px solid rgba(0,0,0,0.1); padding-bottom:6px; font-family:'Poppins',sans-serif;">🗺️ Map Style</div>
+            <label style="font-size:12px; cursor:pointer; display:flex; align-items:center; gap:5px;"><input type="radio" name="bmap" value="osm" checked> OpenStreetMap</label>
+            <label style="font-size:12px; cursor:pointer; display:flex; align-items:center; gap:5px;"><input type="radio" name="bmap" value="topo"> Topographic</label>
+            <label style="font-size:12px; cursor:pointer; display:flex; align-items:center; gap:5px;"><input type="radio" name="bmap" value="sat"> Satellite</label>
+        `;
+                L.DomEvent.disableClickPropagation(div);
+                return div;
+            };
+            basemapSwitcher.addTo(map);
+
+            document.querySelectorAll('input[name="bmap"]').forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    // Remove previous basemaps gracefully without touching GeoJSON
+                    map.eachLayer(l => {
+                        if (l instanceof L.TileLayer && l._url && !l._url.includes('mini-map')) map.removeLayer(l);
+                    });
+
+                    if (e.target.value === 'osm') {
+                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+                    } else if (e.target.value === 'topo') {
+                        L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png').addTo(map);
+                    } else if (e.target.value === 'sat') {
+                        esriSat.addTo(map);
+                    }
+                });
+            });
+
+            // --- 15. Expand Keyboard Shortcuts ---
+            document.addEventListener('keydown', (e) => {
+                if (e.target.tagName.toLowerCase() === 'input') return; // Ignore if user is typing
+                const key = e.key.toLowerCase();
+                if (key === 'f') { // Fullscreen Toggle
+                    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => { });
+                    else if (document.exitFullscreen) document.exitFullscreen();
+                }
+            });
+
+            // --- 18. Error Handling for GeoJSON ---
+            let isDataLoaded = false;
+
+            // Safety timeout in case the fetch fails or data doesn't exist
+            const errorSafetyNet = setTimeout(() => {
+                if (!isDataLoaded && (typeof allData === 'undefined' || !allData)) {
+                    const errDiv = document.createElement('div');
+                    errDiv.style.cssText = `
+                position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+                background: rgba(231, 76, 60, 0.95); color: white; padding: 15px 25px;
+                border-radius: 8px; z-index: 9999; font-family: 'Poppins', sans-serif;
+                font-weight: 500; box-shadow: 0 8px 24px rgba(231, 76, 60, 0.4);
+                backdrop-filter: blur(10px);
+            `;
+                    errDiv.innerHTML = "⚠️ <b>Connection Error:</b> Failed to load spatial data. Please ensure 'data/data.geojson' exists and the local server is running.";
+                    document.body.appendChild(errDiv);
+
+                    const loader = document.getElementById('loading-overlay');
+                    if (loader) loader.style.display = 'none'; // Clear loader on error
+                }
+            }, 8000); // 8 second timeout threshold
+
+            // Continuous checker to mark success
+            const successChecker = setInterval(() => {
+                if (typeof allData !== 'undefined' && allData) {
+                    isDataLoaded = true;
+                    clearTimeout(errorSafetyNet); // Cancel the error message
+                    clearInterval(successChecker);
+                }
+            }, 500);
+
+        })();
+        // ==========================================
+        // 🚀 STARTUP-LEVEL DASHBOARD UI/UX (A+ GRADE) 🚀
+        // ==========================================
+
+        (function () {
+            // --- 1. Inject Startup-level Modern CSS ---
+            const startupStyles = document.createElement('style');
+            startupStyles.innerHTML = `
+        /* Root & Color Palette (SaaS Aesthetic) */
+        :root {
+            --primary: #6366f1;       /* Indigo */
+            --primary-hover: #4f46e5;
+            --accent: #22c55e;        /* Green */
+            --bg-light: #f8fafc;
+            --bg-dark: #0f172a;
+            --panel-light: rgba(255, 255, 255, 0.85);
+            --panel-dark: rgba(15, 23, 42, 0.85);
+            --text-light: #334155;
+            --text-dark: #f1f5f9;
+            --border-light: rgba(255, 255, 255, 0.6);
+            --border-dark: rgba(255, 255, 255, 0.1);
+            --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            --shadow-hover: 0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            --radius-lg: 20px;
+            --radius-md: 12px;
+            --transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* Base Typography Overrides */
+        body, html, .leaflet-container {
+            font-family: 'Inter', 'Poppins', sans-serif !important;
+            color: var(--text-light);
+        }
+        body.dark-mode { color: var(--text-dark); }
+
+        /* Hide Old Redundant Controls (We are replacing these with the modern UI) */
+        .advanced-left, .action-controls, #sidebar-panel { display: none !important; }
+
+        /* Shift Map Down to accommodate Top Nav */
+        #map { height: calc(100vh - 65px) !important; margin-top: 65px; }
+        .leaflet-top { top: 15px !important; }
+        
+        /* Modernize existing Leaflet Zoom Controls */
+        .leaflet-control-zoom { border: none !important; box-shadow: var(--shadow) !important; border-radius: 12px !important; overflow: hidden; }
+        .leaflet-control-zoom a { background: var(--panel-light) !important; color: var(--text-light) !important; backdrop-filter: blur(10px); transition: var(--transition); border-bottom: 1px solid var(--border-light) !important;}
+        .leaflet-control-zoom a:hover { background: #fff !important; color: var(--primary) !important; }
+        body.dark-mode .leaflet-control-zoom a { background: var(--panel-dark) !important; color: var(--text-dark) !important; border-color: var(--border-dark) !important;}
+
+        /* --- 2. Top Navigation Bar --- */
+        #top-nav {
+            position: absolute; top: 0; left: 0; right: 0; height: 65px;
+            background: var(--panel-light); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+            border-bottom: 1px solid var(--border-light); z-index: 2000;
+            display: flex; justify-content: space-between; align-items: center; padding: 0 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); transition: var(--transition);
+        }
+        body.dark-mode #top-nav { background: var(--panel-dark); border-bottom: 1px solid var(--border-dark); }
+        
+        .nav-brand { display: flex; flex-direction: column; justify-content: center; }
+        .nav-title { font-size: 20px; font-weight: 700; color: var(--primary); letter-spacing: -0.5px; margin: 0; line-height: 1.2; }
+        .nav-subtitle { font-size: 12px; color: #64748b; font-weight: 500; margin: 0; letter-spacing: 0.2px; }
+        body.dark-mode .nav-subtitle { color: #94a3b8; }
+        
+        .nav-actions { display: flex; gap: 12px; }
+        .icon-btn {
+            background: rgba(99, 102, 241, 0.05); border: 1px solid transparent; width: 42px; height: 42px; border-radius: 50%;
+            cursor: pointer; display: flex; justify-content: center; align-items: center;
+            font-size: 18px; color: var(--text-light); transition: var(--transition);
+        }
+        body.dark-mode .icon-btn { background: rgba(255,255,255,0.05); color: var(--text-dark); }
+        .icon-btn:hover { background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.3); color: var(--primary); transform: scale(1.05); }
+
+        /* --- 1. Floating Glass Sidebar --- */
+        #dash-sidebar {
+            position: absolute; top: 85px; left: -400px; width: 340px; max-height: calc(100vh - 120px);
+            background: var(--panel-light); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+            border: 1px solid var(--border-light); border-radius: var(--radius-lg);
+            box-shadow: var(--shadow); z-index: 1500; padding: 24px; overflow-y: auto;
+            transition: left 0.5s cubic-bezier(0.16, 1, 0.3, 1), background 0.3s; 
+            display: flex; flex-direction: column; gap: 24px;
+        }
+        #dash-sidebar.active { left: 20px; }
+        body.dark-mode #dash-sidebar { background: var(--panel-dark); border-color: var(--border-dark); }
+        
+        /* --- 5. Modern Search UI --- */
+        .search-container { position: relative; }
+        .modern-search {
+            width: 100%; padding: 14px 16px 14px 44px; border-radius: var(--radius-md);
+            border: 1px solid #e2e8f0; background: #ffffff; color: var(--text-light);
+            font-size: 14px; font-weight: 500; transition: var(--transition);
+            box-sizing: border-box; outline: none; box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        }
+        .modern-search:focus { border-color: var(--primary); box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15); }
+        .search-icon { position: absolute; left: 16px; top: 14px; color: #94a3b8; font-size: 16px; pointer-events: none; }
+        body.dark-mode .modern-search { background: #1e293b; border-color: #334155; color: var(--text-dark); }
+
+        /* --- 6. Statistics Cards --- */
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .stat-card {
+            background: rgba(255,255,255,0.6); padding: 16px; border-radius: var(--radius-md);
+            border: 1px solid var(--border-light); display: flex; flex-direction: column;
+            transition: var(--transition); box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        }
+        .stat-card.full { grid-column: span 2; }
+        body.dark-mode .stat-card { background: rgba(0,0,0,0.2); border-color: var(--border-dark); }
+        .stat-card:hover { transform: translateY(-4px); box-shadow: var(--shadow); background: #fff; }
+        body.dark-mode .stat-card:hover { background: #1e293b; }
+        .stat-value { font-size: 26px; font-weight: 800; color: var(--primary); margin-bottom: 4px; line-height: 1; }
+        .stat-label { font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }
+        
+        /* Feature Info Box */
+        .info-card {
+            background: #fff; border-radius: var(--radius-md); padding: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; display: none;
+            animation: fadeIn 0.4s ease forwards;
+        }
+        body.dark-mode .info-card { background: #1e293b; border-color: #334155; }
+        .info-card h4 { margin: 0 0 12px 0; color: var(--primary); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px; }
+        body.dark-mode .info-card h4 { border-bottom-color: #334155; }
+        
+        /* --- 3. Floating Action Buttons (FAB) --- */
+        .fab-group {
+            position: absolute; bottom: 30px; right: 24px; z-index: 1500;
+            display: flex; flex-direction: column; gap: 16px; align-items: center;
+        }
+        .fab {
+            width: 54px; height: 54px; border-radius: 50%; background: var(--primary);
+            color: white; border: none; box-shadow: var(--shadow); cursor: pointer;
+            display: flex; justify-content: center; align-items: center; font-size: 22px;
+            transition: var(--transition); outline: none;
+        }
+        .fab:hover { background: var(--primary-hover); transform: scale(1.08) translateY(-4px); box-shadow: var(--shadow-hover); }
+        .fab.secondary { background: #ffffff; color: var(--text-light); width: 46px; height: 46px; font-size: 18px; }
+        body.dark-mode .fab.secondary { background: #1e293b; color: var(--text-dark); border: 1px solid #334155; }
+        .fab.secondary:hover { color: var(--primary); }
+
+        /* --- 4. Toast Notification System --- */
+        #toast-container { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 3000; display: flex; flex-direction: column; gap: 12px; pointer-events: none; }
+        .toast {
+            background: rgba(15, 23, 42, 0.95); color: white; padding: 14px 28px;
+            border-radius: 30px; font-size: 14px; font-weight: 500; box-shadow: var(--shadow-hover);
+            backdrop-filter: blur(10px); animation: toastIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            display: flex; align-items: center; gap: 10px; letter-spacing: 0.3px; border: 1px solid rgba(255,255,255,0.1);
+        }
+        @keyframes toastIn { from { opacity: 0; transform: translateY(30px) scale(0.9); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes toastOut { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-20px) scale(0.9); } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* --- 7. Feature Highlight Glow Effect --- */
+        path.leaflet-interactive:hover { filter: drop-shadow(0 0 8px var(--primary)) brightness(1.2); }
+
+        /* --- 12. Mobile Responsiveness --- */
+        @media (max-width: 768px) {
+            #dash-sidebar { width: calc(100vw - 32px); left: -120%; top: 80px; max-height: 50vh; padding: 16px; }
+            #dash-sidebar.active { left: 16px; }
+            .fab-group { bottom: 20px; right: 16px; gap: 12px; }
+            .fab { width: 48px; height: 48px; font-size: 20px; }
+            .fab.secondary { width: 40px; height: 40px; font-size: 16px; }
+            .nav-title { font-size: 16px; }
+            .nav-subtitle { display: none; }
+            .toast { font-size: 13px; padding: 12px 20px; width: max-content; }
+        }
+    `;
+            document.head.appendChild(startupStyles);
+
+            // --- 2. Build Top Navigation Bar ---
+            const topNav = document.createElement('div');
+            topNav.id = 'top-nav';
+            topNav.innerHTML = `
+        <div class="nav-brand">
+            <h1 class="nav-title">🌍 Strasbourg WebGIS</h1>
+            <p class="nav-subtitle">Interactive Spatial Dashboard</p>
+        </div>
+        <div class="nav-actions">
+            <button class="icon-btn" id="btn-sidebar-toggle" title="Toggle Dashboard Sidebar">📊</button>
+            <button class="icon-btn" id="btn-theme-toggle" title="Toggle Dark/Light Theme">🌓</button>
+            <button class="icon-btn" id="btn-fs-toggle" title="Toggle Fullscreen">⛶</button>
+        </div>
+    `;
+            document.body.appendChild(topNav);
+
+            // --- 1. Build Floating Glass Sidebar ---
+            const sidePanel = document.createElement('div');
+            sidePanel.id = 'dash-sidebar';
+            sidePanel.className = 'active'; // open by default for desktop
+            sidePanel.innerHTML = `
+        <!-- Modern Search UI -->
+        <div class="search-container">
+            <span class="search-icon">🔍</span>
+            <input type="text" class="modern-search" id="dash-search-input" placeholder="Search buildings, roads...">
+        </div>
+        
+        <!-- Statistics Dashboard Cards -->
+        <div class="stats-grid">
+            <div class="stat-card full">
+                <div class="stat-value" id="stat-total">0</div>
+                <div class="stat-label">Total Visible Features</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-buildings" style="color:var(--primary);">0</div>
+                <div class="stat-label">Buildings</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-roads" style="color:var(--accent);">0</div>
+                <div class="stat-label">Roads</div>
+            </div>
+        </div>
+
+        <!-- Dynamic Feature Info Panel -->
+        <div class="info-card" id="dash-info">
+            <h4>📍 Feature Properties</h4>
+            <div id="dash-info-content" style="font-size:13px; line-height:1.7;">Select a feature on the map to inspect its data.</div>
+        </div>
+    `;
+            document.body.appendChild(sidePanel);
+
+            // --- 3. Build Floating Action Buttons (FAB) ---
+            const fabGroup = document.createElement('div');
+            fabGroup.className = 'fab-group';
+            fabGroup.innerHTML = `
+        <button class="fab secondary" id="fab-layer" title="Toggle Layer Visibility">👁️</button>
+        <button class="fab secondary" id="fab-locate" title="Locate My Position">📡</button>
+        <button class="fab" id="fab-reset" title="Reset Map View">🗺️</button>
+    `;
+            document.body.appendChild(fabGroup);
+
+            // --- 4. Toast Notification System ---
+            const toastContainer = document.createElement('div');
+            toastContainer.id = 'toast-container';
+            document.body.appendChild(toastContainer);
+
+            function showToast(message, icon = "✨") {
+                const toast = document.createElement('div');
+                toast.className = 'toast';
+                toast.innerHTML = `<span>${icon}</span> <span>${message}</span>`;
+                toastContainer.appendChild(toast);
+
+                setTimeout(() => {
+                    toast.style.animation = 'toastOut 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards';
+                    setTimeout(() => toast.remove(), 400);
+                }, 3000);
+            }
+
+            // ==========================================
+            // 🧠 LOGIC & MICRO-INTERACTIONS WIRING
+            // ==========================================
+
+            // Top Navigation Toggles
+            document.getElementById('btn-sidebar-toggle').onclick = () => {
+                const sidebar = document.getElementById('dash-sidebar');
+                sidebar.classList.toggle('active');
+                if (sidebar.classList.contains('active')) showToast("Dashboard opened", "📊");
+            };
+
+            document.getElementById('btn-theme-toggle').onclick = () => {
+                document.body.classList.toggle('dark-mode');
+                showToast(document.body.classList.contains('dark-mode') ? "Dark Mode enabled" : "Light Mode enabled", "🌓");
+                // Sync with existing dark mode if it exists
+                const oldToggle = document.getElementById('dark-mode-btn');
+                if (oldToggle) oldToggle.click();
+            };
+
+            document.getElementById('btn-fs-toggle').onclick = () => {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(() => { });
+                    showToast("Entered Fullscreen", "⛶");
+                } else if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            };
+
+            // FAB Button Actions
+            document.getElementById('fab-reset').onclick = () => {
+                if (typeof geojsonLayer !== 'undefined' && geojsonLayer.getBounds && geojsonLayer.getBounds().isValid()) {
+                    map.flyToBounds(geojsonLayer.getBounds(), { duration: 1.2, padding: [30, 30] });
+                    showToast("Map view reset", "🗺️");
+                } else {
+                    map.flyTo([48.5734, 7.7521], 12, { duration: 1.2 });
+                }
+            };
+
+            document.getElementById('fab-locate').onclick = () => {
+                map.locate({ setView: true, maxZoom: 16 });
+                showToast("Locating your device...", "📡");
+            };
+
+            document.getElementById('fab-layer').onclick = () => {
+                if (typeof geojsonLayer !== 'undefined') {
+                    if (map.hasLayer(geojsonLayer)) {
+                        map.removeLayer(geojsonLayer);
+                        showToast("Data Layer Hidden", "👁️‍🗨️");
+                    } else {
+                        map.addLayer(geojsonLayer);
+                        showToast("Data Layer Visible", "👁️");
+                    }
+                }
+            };
+
+            // Override Map Click for Coordinate Copy to use Toast
+            map.on('click', function (e) {
+                // Only trigger if clicking directly on the map (not a feature/marker)
+                if (e.originalEvent && e.originalEvent.target && e.originalEvent.target.tagName.toLowerCase() === 'svg') {
+                    const coords = e.latlng.lat.toFixed(5) + ', ' + e.latlng.lng.toFixed(5);
+                    navigator.clipboard.writeText(coords).then(() => {
+                        showToast("Coordinates copied: " + coords, "📍");
+                    }).catch(() => { });
+                }
+            });
+
+            // --- 6. Dynamic Statistics Intelligence ---
+            function updateDashboardStats() {
+                if (typeof geojsonLayer === 'undefined' || !geojsonLayer) return;
+                let total = 0, buildings = 0, roads = 0;
+
+                geojsonLayer.eachLayer(layer => {
+                    total++;
+                    const props = layer.feature.properties || {};
+                    if (props.building) buildings++;
+                    if (props.highway) roads++;
+                });
+
+                // Animate counter changes
+                animateValue('stat-total', parseInt(document.getElementById('stat-total').innerText), total, 600);
+                animateValue('stat-buildings', parseInt(document.getElementById('stat-buildings').innerText), buildings, 600);
+                animateValue('stat-roads', parseInt(document.getElementById('stat-roads').innerText), roads, 600);
+            }
+
+            function animateValue(id, start, end, duration) {
+                if (start === end) return;
+                const obj = document.getElementById(id);
+                let startTimestamp = null;
+                const step = (timestamp) => {
+                    if (!startTimestamp) startTimestamp = timestamp;
+                    const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                    obj.innerText = Math.floor(progress * (end - start) + start);
+                    if (progress < 1) window.requestAnimationFrame(step);
+                };
+                window.requestAnimationFrame(step);
+            }
+
+            // --- Populate Feature Info Panel on Click ---
+            map.on('popupopen', function (e) {
+                const infoCard = document.getElementById('dash-info');
+                const infoContent = document.getElementById('dash-info-content');
+
+                if (e.popup && e.popup._source && e.popup._source.feature) {
+                    const props = e.popup._source.feature.properties;
+                    infoCard.style.display = 'block';
+
+                    let html = '<table style="width:100%; text-align:left; border-collapse:collapse;">';
+                    for (let key in props) {
+                        if (props[key] && props[key] !== 'null') {
+                            html += `<tr>
+                                <td style="padding:6px 0; color:#64748b; font-weight:600; text-transform:capitalize; border-bottom:1px solid rgba(0,0,0,0.05);">${key}</td>
+                                <td style="padding:6px 0; text-align:right; font-weight:500; color:var(--text-light); border-bottom:1px solid rgba(0,0,0,0.05);">${props[key]}</td>
+                             </tr>`;
                         }
                     }
-                }).addTo(map);
+                    html += '</table>';
+
+                    // Handle Dark mode text colors in injected HTML
+                    if (document.body.classList.contains('dark-mode')) {
+                        html = html.replace(/color:#64748b/g, 'color:#94a3b8').replace(/color:var\(--text-light\)/g, 'color:#f1f5f9').replace(/rgba\(0,0,0,0.05\)/g, 'rgba(255,255,255,0.05)');
+                    }
+
+                    infoContent.innerHTML = html;
+
+                    // Auto-open sidebar on mobile if a feature is clicked
+                    if (window.innerWidth <= 768) {
+                        document.getElementById('dash-sidebar').classList.add('active');
+                    }
+                }
             });
+
+            map.on('popupclose', function () {
+                document.getElementById('dash-info').style.display = 'none';
+            });
+
+            // --- 5. Modern Search UI Logic ---
+            document.getElementById('dash-search-input').addEventListener('input', (e) => {
+                const query = e.target.value.toLowerCase().trim();
+
+                // Remove existing dropdown to refresh
+                const existingDrop = document.getElementById('dash-search-results');
+                if (existingDrop) existingDrop.remove();
+
+                if (query.length < 2) return;
+
+                let matches = [];
+                if (typeof allData !== 'undefined' && allData.features) {
+                    matches = allData.features.filter(f => {
+                        const props = f.properties || {};
+                        const nameStr = String(props.name || props.NAME || props.NOM || props.nom || props.id || "").toLowerCase();
+                        return nameStr.includes(query);
+                    }).slice(0, 8); // Top 8 results
+                }
+
+                if (matches.length > 0) {
+                    const drop = document.createElement('div');
+                    drop.id = 'dash-search-results';
+                    drop.style.cssText = `
+                position: absolute; width: 100%; top: calc(100% + 5px); left: 0;
+                background: var(--panel-light); border-radius: var(--radius-md);
+                box-shadow: var(--shadow-hover); z-index: 2000; max-height: 220px;
+                overflow-y: auto; backdrop-filter: blur(16px); border: 1px solid var(--border-light);
+            `;
+                    if (document.body.classList.contains('dark-mode')) drop.style.background = 'var(--panel-dark)';
+
+                    matches.forEach(match => {
+                        const item = document.createElement('div');
+                        item.style.cssText = `
+                    padding: 12px 16px; cursor: pointer; font-size: 13px; font-weight: 500;
+                    border-bottom: 1px solid rgba(0,0,0,0.05); transition: background 0.2s;
+                `;
+                        const props = match.properties || {};
+                        item.innerText = props.name || props.NAME || props.NOM || props.nom || props.id || "Unnamed Spatial Feature";
+
+                        item.onmouseover = () => item.style.background = 'rgba(99,102,241,0.08)';
+                        item.onmouseout = () => item.style.background = 'transparent';
+
+                        item.onclick = () => {
+                            if (typeof geojsonLayer !== 'undefined') {
+                                geojsonLayer.eachLayer(layer => {
+                                    if (layer.feature === match) {
+                                        if (layer.getBounds) map.flyToBounds(layer.getBounds(), { padding: [50, 50], duration: 1.2 });
+                                        else if (layer.getLatLng) map.flyTo(layer.getLatLng(), 18, { duration: 1.2 });
+                                        layer.openPopup();
+                                        showToast("Feature Located", "🎯");
+                                    }
+                                });
+                            }
+                            drop.remove();
+                            e.target.value = ''; // clear input
+                        };
+                        drop.appendChild(item);
+                    });
+                    document.querySelector('.search-container').appendChild(drop);
+                }
+            });
+
+            // Close search dropdown when clicking outside
+            document.addEventListener('click', (e) => {
+                if (e.target.id !== 'dash-search-input') {
+                    const drop = document.getElementById('dash-search-results');
+                    if (drop) drop.remove();
+                }
+            });
+
+            // --- 11. Initialization & Data Syncing ---
+            const initSyncInterval = setInterval(() => {
+                if (typeof allData !== 'undefined' && typeof geojsonLayer !== 'undefined') {
+                    updateDashboardStats();
+
+                    // Sync stats when the original filters are changed
+                    document.querySelectorAll('input[name="layerFilter"]').forEach(radio => {
+                        radio.addEventListener('change', () => {
+                            setTimeout(updateDashboardStats, 150);
+                        });
+                    });
+
+                    clearInterval(initSyncInterval);
+
+                    // Give a slight delay before showing the success toast for premium feel
+                    setTimeout(() => {
+                        showToast("Dashboard successfully initialized", "🚀");
+                    }, 800);
+                }
+            }, 500);
+
+        })();
+
+        // ==========================================
+        // 💎 PREMIUM WATERMARK (Atalya Karsten) 💎
+        // ==========================================
+        (function () {
+            const watermarkStyles = document.createElement('style');
+            watermarkStyles.innerHTML = `
+        #creditTag {
+            position: absolute;
+            bottom: 20px;
+            right: 180px; /* Offset to avoid overlapping with FABs */
+            z-index: 2000;
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            padding: 8px 16px;
+            border-radius: 30px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+            transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            text-decoration: none;
+            color: #334155;
+            font-family: 'Poppins', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+
+        body.dark-mode #creditTag {
+            background: rgba(15, 23, 42, 0.85);
+            border-color: rgba(255, 255, 255, 0.1);
+            color: #f1f5f9;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        #creditTag:hover {
+            transform: translateY(-4px) scale(1.03);
+            box-shadow: 0 10px 25px rgba(99, 102, 241, 0.25);
+            border-color: rgba(99, 102, 241, 0.4);
+            color: #6366f1;
+        }
+        
+        body.dark-mode #creditTag:hover {
+            box-shadow: 0 10px 25px rgba(99, 102, 241, 0.4);
+            color: #818cf8;
+        }
+
+        /* Animated Glowing Dot */
+        .glowing-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #22c55e;
+            border-radius: 50%;
+            position: relative;
+        }
+
+        .glowing-dot::after {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            width: 16px;
+            height: 16px;
+            background-color: rgba(34, 197, 94, 0.4);
+            border-radius: 50%;
+            animation: pulseDot 2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes pulseDot {
+            0% { transform: scale(0.5); opacity: 1; }
+            100% { transform: scale(2.2); opacity: 0; }
+        }
+
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            #creditTag {
+                bottom: 20px;
+                right: 80px;
+                padding: 6px 14px;
+                font-size: 12px;
+                gap: 8px;
+            }
+            .glowing-dot { width: 6px; height: 6px; }
+            .glowing-dot::after { top: -3px; left: -3px; width: 12px; height: 12px; }
+        }
+    `;
+            document.head.appendChild(watermarkStyles);
+
+            const watermark = document.createElement('a');
+            watermark.id = 'creditTag';
+            watermark.href = 'https://www.instagram.com/ayaelsf?igsh=YWJsYjNtajFtM3lh';
+            watermark.target = '_blank';
+            watermark.rel = 'noopener noreferrer';
+            watermark.innerHTML = `
+        <div class="glowing-dot"></div>
+        <span>Atalya Karsten</span>
+    `;
+
+            document.body.appendChild(watermark);
+        })();
+
     </script>
 
 </body>
