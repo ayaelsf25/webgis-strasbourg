@@ -152,7 +152,7 @@
         var geojsonLayer; // Store the active layer
         var allData; // Store the fetched data
 
-        fetch('/data/strasbourg.geojson?v=' + Date.now(), {
+        fetch('/strasbourg.geojson?v=' + Date.now(), {
             cache: "no-store"
         })
             .then(response => response.json())
