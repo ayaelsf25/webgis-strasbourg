@@ -107,7 +107,7 @@
         });
 
         // Add basemaps to a layer control
-        var layerControl = L.control.layers({
+        L.control.layers({
             "OSM Default": osmLayer,
             "OpenTopoMap": topoMapLayer
         }).addTo(map);
@@ -150,7 +150,6 @@
 
         // Load GeoJSON
         var geojsonLayer; // Store the active layer
-        var roadsLayer; // Store the dedicated roads layer
         var allData; // Store the fetched data
 
         fetch('/strasbourg.geojson?v=' + Date.now(), {
@@ -159,38 +158,6 @@
             .then(response => response.json())
             .then(data => {
                 allData = data;
-
-                // 1. Create a dedicated roads layer
-                roadsLayer = L.geoJSON(allData, {
-                    filter: function (feature) {
-                        return feature.properties && feature.properties.highway;
-                    },
-                    style: function (feature) {
-                        return {
-                            color: '#333333', // Dark gray for roads
-                            weight: 1.5,
-                            opacity: 0.8
-                        };
-                    },
-                    onEachFeature: function (feature, layer) {
-                        if (feature.properties) {
-                            let popupContent = "<div class='custom-popup'>";
-                            popupContent += "<h4 class='popup-title'>Road Information</h4>";
-                            popupContent += "<table class='popup-table'>";
-                            for (let key in feature.properties) {
-                                let val = feature.properties[key];
-                                if (val !== null && val !== "") {
-                                    popupContent += "<tr><th>" + key + "</th><td>" + val + "</td></tr>";
-                                }
-                            }
-                            popupContent += "</table></div>";
-                            layer.bindPopup(popupContent);
-                        }
-                    }
-                }).addTo(map);
-
-                // Add the dedicated roads layer to the layer control
-                layerControl.addOverlay(roadsLayer, "Roads Network");
 
                 // Function to render data based on the selected filter
                 function renderData(filterType) {
@@ -201,23 +168,48 @@
                     geojsonLayer = L.geoJSON(allData, {
                         // 1. Layer Filter Control logic
                         filter: function (feature) {
-                            // Exclude roads from the main layer since they have a dedicated layer
-                            if (feature.properties && feature.properties.highway) {
-                                return false;
-                            }
-
                             if (filterType === 'buildings') {
                                 return feature.properties && feature.properties.building;
-                            } else if (filterType === 'roads') {
-                                return false; // Handled exclusively by roadsLayer now
+                            } else if (filterType === 'amenities') {
+                                return feature.properties && feature.properties.amenity;
                             }
-                            return true; // Show all (except roads)
+                            // 'all' now means buildings and amenities
+                            return feature.properties && (feature.properties.building || feature.properties.amenity);
+                        },
+                        style: function (feature) {
+                            // Styling for buildings
+                            if (feature.properties && feature.properties.building) {
+                                return {
+                                    color: '#475569', // Slate gray
+                                    weight: 1,
+                                    fillColor: '#94a3b8', // Light slate
+                                    fillOpacity: 0.6
+                                };
+                            }
+                        },
+                        pointToLayer: function (feature, latlng) {
+                            // Styling for amenities
+                            if (feature.properties && feature.properties.amenity) {
+                                return L.circleMarker(latlng, {
+                                    radius: 6,
+                                    fillColor: "#22c55e", // Green accent
+                                    color: "#ffffff",
+                                    weight: 1.5,
+                                    opacity: 1,
+                                    fillOpacity: 0.8
+                                });
+                            }
+                            return L.marker(latlng);
                         },
                         onEachFeature: function (feature, layer) {
                             if (feature.properties) {
                                 // 2. Improved Popup Design
                                 let popupContent = "<div class='custom-popup'>";
-                                popupContent += "<h4 class='popup-title'>Feature Information</h4>";
+                                let featureType = "Feature";
+                                if (feature.properties.amenity) featureType = "Amenity: " + feature.properties.amenity;
+                                else if (feature.properties.building) featureType = "Building" + (feature.properties.building !== "yes" ? ": " + feature.properties.building : "");
+                                
+                                popupContent += "<h4 class='popup-title'>" + featureType + "</h4>";
                                 popupContent += "<table class='popup-table'>";
 
                                 for (let key in feature.properties) {
@@ -245,7 +237,7 @@
                         <b>Layer Filter</b><br>
                         <label><input type="radio" name="layerFilter" value="all" checked> Show all</label><br>
                         <label><input type="radio" name="layerFilter" value="buildings"> Buildings only</label><br>
-                        <label><input type="radio" name="layerFilter" value="roads"> Roads only</label>
+                        <label><input type="radio" name="layerFilter" value="amenities"> Amenities only</label>
                     `;
 
                     // Prevent map interactions when clicking the control
@@ -714,7 +706,7 @@
         <!-- Modern Search UI -->
         <div class="search-container">
             <span class="search-icon">🔍</span>
-            <input type="text" class="modern-search" id="dash-search-input" placeholder="Search buildings, roads...">
+            <input type="text" class="modern-search" id="dash-search-input" placeholder="Search buildings, amenities...">
         </div>
         
         <!-- Statistics Dashboard Cards -->
@@ -728,8 +720,8 @@
                 <div class="stat-label">Buildings</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="stat-roads" style="color:var(--accent);">0</div>
-                <div class="stat-label">Roads</div>
+                <div class="stat-value" id="stat-amenities" style="color:var(--accent);">0</div>
+                <div class="stat-label">Amenities</div>
             </div>
         </div>
 
@@ -836,29 +828,22 @@
 
             // --- 6. Dynamic Statistics Intelligence ---
             function updateDashboardStats() {
-                let total = 0, buildings = 0, roads = 0;
+                if (typeof geojsonLayer === 'undefined' || !geojsonLayer) return;
+                
+                let buildings = 0, amenities = 0;
 
-                // Count non-road features (buildings, public, etc.)
-                if (typeof geojsonLayer !== 'undefined' && geojsonLayer) {
-                    geojsonLayer.eachLayer(layer => {
-                        total++;
-                        const props = layer.feature.properties || {};
-                        if (props.building) buildings++;
-                    });
-                }
+                geojsonLayer.eachLayer(layer => {
+                    const props = layer.feature.properties || {};
+                    if (props.building) buildings++;
+                    if (props.amenity) amenities++;
+                });
 
-                // Count road features
-                if (typeof roadsLayer !== 'undefined' && map.hasLayer(roadsLayer)) {
-                    roadsLayer.eachLayer(layer => {
-                        total++;
-                        roads++;
-                    });
-                }
+                const total = buildings + amenities;
 
                 // Animate counter changes
                 animateValue('stat-total', parseInt(document.getElementById('stat-total').innerText) || 0, total, 600);
                 animateValue('stat-buildings', parseInt(document.getElementById('stat-buildings').innerText) || 0, buildings, 600);
-                animateValue('stat-roads', parseInt(document.getElementById('stat-roads').innerText) || 0, roads, 600);
+                animateValue('stat-amenities', parseInt(document.getElementById('stat-amenities').innerText) || 0, amenities, 600);
             }
 
             function animateValue(id, start, end, duration) {
@@ -927,7 +912,8 @@
                     matches = allData.features.filter(f => {
                         const props = f.properties || {};
                         const nameStr = String(props.name || props.NAME || props.NOM || props.nom || props.id || "").toLowerCase();
-                        return nameStr.includes(query);
+                        const typeStr = String(props.amenity || props.building || "").toLowerCase();
+                        return nameStr.includes(query) || typeStr.includes(query);
                     }).slice(0, 8); // Top 8 results
                 }
 
