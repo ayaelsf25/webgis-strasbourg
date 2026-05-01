@@ -107,7 +107,7 @@
         });
 
         // Add basemaps to a layer control
-        L.control.layers({
+        var layerControl = L.control.layers({
             "OSM Default": osmLayer,
             "OpenTopoMap": topoMapLayer
         }).addTo(map);
@@ -150,6 +150,7 @@
 
         // Load GeoJSON
         var geojsonLayer; // Store the active layer
+        var roadsLayer; // Store the dedicated roads layer
         var allData; // Store the fetched data
 
         fetch('/strasbourg.geojson?v=' + Date.now(), {
@@ -158,6 +159,38 @@
             .then(response => response.json())
             .then(data => {
                 allData = data;
+
+                // 1. Create a dedicated roads layer
+                roadsLayer = L.geoJSON(allData, {
+                    filter: function (feature) {
+                        return feature.properties && feature.properties.highway;
+                    },
+                    style: function (feature) {
+                        return {
+                            color: '#333333', // Dark gray for roads
+                            weight: 1.5,
+                            opacity: 0.8
+                        };
+                    },
+                    onEachFeature: function (feature, layer) {
+                        if (feature.properties) {
+                            let popupContent = "<div class='custom-popup'>";
+                            popupContent += "<h4 class='popup-title'>Road Information</h4>";
+                            popupContent += "<table class='popup-table'>";
+                            for (let key in feature.properties) {
+                                let val = feature.properties[key];
+                                if (val !== null && val !== "") {
+                                    popupContent += "<tr><th>" + key + "</th><td>" + val + "</td></tr>";
+                                }
+                            }
+                            popupContent += "</table></div>";
+                            layer.bindPopup(popupContent);
+                        }
+                    }
+                }).addTo(map);
+
+                // Add the dedicated roads layer to the layer control
+                layerControl.addOverlay(roadsLayer, "Roads Network");
 
                 // Function to render data based on the selected filter
                 function renderData(filterType) {
@@ -168,12 +201,17 @@
                     geojsonLayer = L.geoJSON(allData, {
                         // 1. Layer Filter Control logic
                         filter: function (feature) {
+                            // Exclude roads from the main layer since they have a dedicated layer
+                            if (feature.properties && feature.properties.highway) {
+                                return false;
+                            }
+
                             if (filterType === 'buildings') {
                                 return feature.properties && feature.properties.building;
                             } else if (filterType === 'roads') {
-                                return feature.properties && feature.properties.highway;
+                                return false; // Handled exclusively by roadsLayer now
                             }
-                            return true; // Show all
+                            return true; // Show all (except roads)
                         },
                         onEachFeature: function (feature, layer) {
                             if (feature.properties) {
@@ -798,20 +836,29 @@
 
             // --- 6. Dynamic Statistics Intelligence ---
             function updateDashboardStats() {
-                if (typeof geojsonLayer === 'undefined' || !geojsonLayer) return;
                 let total = 0, buildings = 0, roads = 0;
 
-                geojsonLayer.eachLayer(layer => {
-                    total++;
-                    const props = layer.feature.properties || {};
-                    if (props.building) buildings++;
-                    if (props.highway) roads++;
-                });
+                // Count non-road features (buildings, public, etc.)
+                if (typeof geojsonLayer !== 'undefined' && geojsonLayer) {
+                    geojsonLayer.eachLayer(layer => {
+                        total++;
+                        const props = layer.feature.properties || {};
+                        if (props.building) buildings++;
+                    });
+                }
+
+                // Count road features
+                if (typeof roadsLayer !== 'undefined' && map.hasLayer(roadsLayer)) {
+                    roadsLayer.eachLayer(layer => {
+                        total++;
+                        roads++;
+                    });
+                }
 
                 // Animate counter changes
-                animateValue('stat-total', parseInt(document.getElementById('stat-total').innerText), total, 600);
-                animateValue('stat-buildings', parseInt(document.getElementById('stat-buildings').innerText), buildings, 600);
-                animateValue('stat-roads', parseInt(document.getElementById('stat-roads').innerText), roads, 600);
+                animateValue('stat-total', parseInt(document.getElementById('stat-total').innerText) || 0, total, 600);
+                animateValue('stat-buildings', parseInt(document.getElementById('stat-buildings').innerText) || 0, buildings, 600);
+                animateValue('stat-roads', parseInt(document.getElementById('stat-roads').innerText) || 0, roads, 600);
             }
 
             function animateValue(id, start, end, duration) {
