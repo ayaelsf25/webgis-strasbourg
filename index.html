@@ -152,7 +152,9 @@
         var geojsonLayer; // Store the active layer
         var allData; // Store the fetched data
 
-        fetch('data/strasbourg.geojson?v=' + Date.now())
+        fetch('/data/strasbourg.geojson?v=' + Date.now(), {
+            cache: "no-store"
+        })
             .then(response => response.json())
             .then(data => {
                 allData = data;
@@ -467,7 +469,7 @@
                 font-weight: 500; box-shadow: 0 8px 24px rgba(231, 76, 60, 0.4);
                 backdrop-filter: blur(10px);
             `;
-                    errDiv.innerHTML = "⚠️ <b>Connection Error:</b> Failed to load spatial data. Please ensure 'data/strasbourg.geojson?v=' + Date.now()) exists and the local server is running.";
+                    errDiv.innerHTML = "⚠️ <b>Connection Error:</b> Failed to load spatial data. Please ensure '/strasbourg.geojson' exists and the local server is running.";
                     document.body.appendChild(errDiv);
 
                     const loader = document.getElementById('loading-overlay');
